@@ -1,0 +1,22 @@
+# Caddy: TLS automatico (Let's Encrypt) y proxy a PHP-FPM.
+# El dominio y el correo ACME se toman de las variables de entorno (.env).
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$MOODLE_DOMAIN} {
+	# Web root = subdirectorio public/ (obligatorio desde Moodle 5.1)
+	root * /var/www/html/public
+
+	encode zstd gzip
+
+	# Pasa los .php al contenedor php-fpm (servicio "php", puerto 9000)
+	php_fastcgi php:9000
+
+	file_server
+
+	# Bloquea acceso directo a rutas sensibles
+	@forbidden path /.git/* /vendor/* /node_modules/*
+	respond @forbidden 404
+}

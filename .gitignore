@@ -1,0 +1,16 @@
+# --- Secretos ---
+.env
+
+# --- Datos de Moodle (viven en volúmenes Docker y en la BD, NO en git) ---
+moodledata/
+
+# --- Clon del core de Moodle (es su propio repo, se trackea con upstream) ---
+moodle/
+
+# --- Respaldos ---
+*.sql
+*.tar.gz
+*.mbz
+
+# --- Sistema ---
+.DS_Store

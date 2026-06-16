@@ -1,0 +1,80 @@
+# =============================================================================
+# Stack Moodle 5.2 para CPI Virtual
+# Caddy (TLS automatico) -> PHP-FPM 8.3 -> MariaDB 11.4 + Redis (sesiones/cache)
+# El codigo de Moodle se monta desde ./moodle (clonado con git en el host).
+# =============================================================================
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      MOODLE_DOMAIN: ${MOODLE_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./moodle:/var/www/html:ro          # sirve los estaticos de public/
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - php
+
+  php:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./moodle:/var/www/html             # codigo (gestionado con git)
+      - moodledata:/var/www/moodledata     # datos (fuera del web root)
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  cron:
+    build: .
+    restart: unless-stopped
+    user: "33:33"                          # www-data: corre cron como el usuario web
+    entrypoint: []                         # omite el chown del entrypoint (ya lo hizo php)
+    command: ["sh", "-c", "sleep 30; while true; do php /var/www/html/admin/cli/cron.php; sleep 60; done"]
+    env_file: .env
+    volumes:
+      - ./moodle:/var/www/html
+      - moodledata:/var/www/moodledata
+    depends_on:
+      - php
+
+  db:
+    image: mariadb:11.4
+    restart: unless-stopped
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    environment:
+      MARIADB_DATABASE: ${DB_NAME}
+      MARIADB_USER: ${DB_USER}
+      MARIADB_PASSWORD: ${DB_PASSWORD}
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+    volumes:
+      - dbdata:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --save "" --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redisdata:/data
+
+volumes:
+  moodledata:
+  dbdata:
+  redisdata:
+  caddy_data:
+  caddy_config:
