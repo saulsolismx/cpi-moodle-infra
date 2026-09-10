@@ -25,19 +25,27 @@ defined('MOODLE_INTERNAL') || die();
  *  - progress: promedio del % de completion de los cursos activos del alumno (los cursos
  *    sin completion configurado no cuentan; los que están al 0% sí cuentan).
  *  - courses:  nº de cursos activos del alumno (excluido el curso-sitio).
- *  - average:  media de las notas finales normalizadas sobre 100, solo de cursos con nota
- *              visible para el alumno. Sin ninguna nota → '-'.
+ *  - average:  media simple de las notas de los QUIZZES presentados, normalizadas sobre
+ *              100, juntando los quizzes de TODOS los cursos del alumno (no media de
+ *              medias). Solo cuenta lo que el alumno puede ver. Sin ningún quiz
+ *              presentado → '-'.
  *
  * @package    block_cpiprogress
  */
 class learning_stats {
 
-    /** Valores por defecto: lo que se muestra si el alumno no tiene nada todavía. */
+    /**
+     * Valores por defecto: lo que se muestra si el alumno no tiene nada todavía.
+     *
+     * 'quizzes' no lo usa el template; es informativo (cuántas notas de quiz entraron en
+     * el promedio) para poder auditar la métrica sin recalcularla por separado.
+     */
     private const EMPTY_STATS = [
         'progress'     => 0,
         'progresstext' => '0%',
         'courses'      => 0,
         'average'      => '-',
+        'quizzes'      => 0,
     ];
 
     /**
@@ -101,9 +109,11 @@ class learning_stats {
             if ($percentage !== null) {
                 $progresses[] = $percentage;
             }
-            $grade = self::course_grade_percentage($course, $userid);
-            if ($grade !== null) {
-                $grades[] = $grade;
+            // Notas de los quizzes presentados en este curso. Se acumulan TODAS en la
+            // misma lista para que el promedio sea una media simple global, no una
+            // media de medias por curso.
+            foreach (self::course_quiz_percentages($course, $userid) as $quizgrade) {
+                $grades[] = $quizgrade;
             }
         }
 
@@ -115,7 +125,9 @@ class learning_stats {
         }
         $stats['progresstext'] = $stats['progress'] . '%';
 
-        // Promedio de notas: solo cursos con nota visible. Sin ninguna → se queda en '-'.
+        // Promedio: media simple de todas las notas de quiz presentadas, juntando los
+        // quizzes de todos los cursos. Sin ninguno presentado → se queda en '-'.
+        $stats['quizzes'] = count($grades);
         if (!empty($grades)) {
             $average = array_sum($grades) / count($grades);
             $stats['average'] = number_format(min(100, max(0, $average)), 1);
@@ -146,58 +158,80 @@ class learning_stats {
     }
 
     /**
-     * Nota final del curso normalizada sobre 100, o null si no hay nota o el alumno no
-     * debe verla.
+     * Notas de los quizzes (mod_quiz) PRESENTADOS por el usuario en un curso,
+     * normalizadas sobre 100. Devuelve una lista (puede estar vacía).
      *
-     * Privacidad: se excluye la nota si (a) el curso oculta las calificaciones
+     * "Presentado" = existe grade_grade con finalgrade no-null para ese grade_item.
+     *
+     * Privacidad: se excluye una nota si (a) el curso oculta las calificaciones
      * (showgrades = 0), o (b) la nota o su grade_item están ocultos —is_hidden() cubre
      * ambos, incluido "oculto hasta" una fecha— y el usuario no tiene la capacidad
      * moodle/grade:viewhidden en ese curso.
      *
      * @param \stdClass $course
      * @param int $userid
-     * @return float|null
+     * @return float[] porcentajes de los quizzes presentados
      */
-    private static function course_grade_percentage(\stdClass $course, int $userid): ?float {
+    private static function course_quiz_percentages(\stdClass $course, int $userid): array {
         // (a) El curso no muestra calificaciones a sus alumnos.
         if (property_exists($course, 'showgrades') && empty($course->showgrades)) {
-            return null;
+            return [];
         }
+
+        $percentages = [];
 
         try {
-            $item = \grade_item::fetch_course_item($course->id);
-            if (empty($item)) {
-                return null;
+            // Solo los ítems de calificación que provienen de un mod_quiz.
+            $items = \grade_item::fetch_all([
+                'courseid'   => $course->id,
+                'itemtype'   => 'mod',
+                'itemmodule' => 'quiz',
+            ]);
+            if (empty($items)) {
+                return [];
             }
 
-            $grade = \grade_grade::fetch(['itemid' => $item->id, 'userid' => $userid]);
-            if (empty($grade) || $grade->finalgrade === null) {
-                return null;
-            }
+            $context = null;
+            foreach ($items as $item) {
+                try {
+                    $grade = \grade_grade::fetch(['itemid' => $item->id, 'userid' => $userid]);
+                    if (empty($grade) || $grade->finalgrade === null) {
+                        // No presentado (o sin calificar todavía): no cuenta.
+                        continue;
+                    }
 
-            // (b) Nota o item ocultos: solo cuenta si el usuario puede ver notas ocultas.
-            if ($grade->is_hidden()) {
-                $context = \context_course::instance($course->id, IGNORE_MISSING);
-                if (!$context || !has_capability('moodle/grade:viewhidden', $context, $userid)) {
-                    return null;
+                    // (b) Nota o item ocultos: solo cuenta si puede ver notas ocultas.
+                    if ($grade->is_hidden()) {
+                        $context = $context ?? \context_course::instance($course->id, IGNORE_MISSING);
+                        if (!$context || !has_capability('moodle/grade:viewhidden', $context, $userid)) {
+                            continue;
+                        }
+                    }
+
+                    // Normalización igual que el core para el display en porcentaje:
+                    // (nota - grademin) / (grademax - grademin) * 100.
+                    $grademin = (float) $item->grademin;
+                    $grademax = (float) $item->grademax;
+                    $range = $grademax - $grademin;
+                    if ($range <= 0) {
+                        // Quiz sin escala válida (grademax <= grademin): se excluye.
+                        continue;
+                    }
+
+                    $percentages[] = (((float) $grade->finalgrade - $grademin) / $range) * 100;
+                } catch (\Throwable $e) {
+                    // Un quiz con datos inconsistentes no debe invalidar el resto.
+                    debugging('block_cpiprogress: fallo la nota del quiz (grade_item ' .
+                        $item->id . ') en el curso ' . $course->id . ': ' . $e->getMessage(),
+                        DEBUG_DEVELOPER);
                 }
             }
-
-            // Normalización igual que el core para el display en porcentaje:
-            // (nota - grademin) / (grademax - grademin) * 100. Con grademin = 0 (lo
-            // habitual) equivale a nota/grademax*100.
-            $grademin = (float) $item->grademin;
-            $grademax = (float) $item->grademax;
-            $range = $grademax - $grademin;
-            if ($range <= 0) {
-                return null;
-            }
-
-            return (((float) $grade->finalgrade - $grademin) / $range) * 100;
         } catch (\Throwable $e) {
-            debugging('block_cpiprogress: fallo la nota del curso ' . $course->id .
+            debugging('block_cpiprogress: fallo al leer los quizzes del curso ' . $course->id .
                 ': ' . $e->getMessage(), DEBUG_DEVELOPER);
-            return null;
+            return $percentages;
         }
+
+        return $percentages;
     }
 }
