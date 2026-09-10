@@ -1,8 +1,9 @@
 <?php
 // Bloque "Aprendizaje" (avance global) — CPI Virtual.
 //
-// ETAPA 1: estructura + maqueta visual con DATOS PLACEHOLDER (sin cálculo real).
-// El cálculo real (completion + promedio de notas a través de los cursos) es la Etapa 2.
+// ETAPA 2: cálculo real. Las métricas (avance global por completion, nº de cursos y
+// promedio de notas) las calcula \block_cpiprogress\local\learning_stats, con caché
+// por-request. El bloque solo muestra datos del usuario en sesión.
 
 defined('MOODLE_INTERNAL') || die();
 
@@ -23,22 +24,25 @@ class block_cpiprogress extends block_base {
     }
 
     public function get_content() {
-        global $OUTPUT;
+        global $OUTPUT, $USER;
+
         if ($this->content !== null) {
             return $this->content;
         }
 
-        // ETAPA 1 — datos FIJOS placeholder (la Etapa 2 los reemplaza por el cálculo real).
-        $data = [
-            'progress'     => 65,     // % avance global (placeholder).
-            'progresstext' => '65%',
-            'courses'      => 3,      // nº de cursos (placeholder).
-            'average'      => '80.0', // promedio de calificaciones (placeholder).
-        ];
-
         $this->content = new stdClass();
-        $this->content->text = $OUTPUT->render_from_template('block_cpiprogress/content', $data);
         $this->content->footer = '';
+
+        // Solo tiene sentido para un usuario real: el bloque siempre habla de SUS datos,
+        // nunca de los de un tercero. Invitado o sesión anónima → bloque vacío.
+        if (!isloggedin() || isguestuser()) {
+            $this->content->text = '';
+            return $this->content;
+        }
+
+        $data = \block_cpiprogress\local\learning_stats::get((int) $USER->id);
+        $this->content->text = $OUTPUT->render_from_template('block_cpiprogress/content', $data);
+
         return $this->content;
     }
 }
