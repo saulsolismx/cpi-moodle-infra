@@ -21,3 +21,4 @@ docker compose exec -u www-data php php /var/www/html/admin/cli/purge_caches.php
 | Archivo | Componente | Claves | Textos |
 |---|---|---|---|
 | `es_local/quiz.php` | `mod_quiz` | `attemptquiz`, `reattemptquiz`, `continueattemptquiz` | Realizar / Reintentar / Continuar **Evaluación** (botón de intento en todos los cuestionarios) |
+| `es_local/moodle.php` | `moodle` (core) | `myhome` | **Inicio** — renombra la pestaña del navbar que apunta a `/my/` (por defecto "Área personal"). Va de la mano de `custommenuitems`; ver [CONFIG-SITIO.md](../CONFIG-SITIO.md) |
