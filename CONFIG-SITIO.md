@@ -94,5 +94,35 @@ sobre el navy `#002256`, con hover en `$cpi-grey-200`.
 
 | Fecha | Ajuste | Aplicado en |
 |---|---|---|
-| 2026-09-09 | `custommenuitems` = Perfil + Calendario | local ✅ · prod ⏳ pendiente |
-| 2026-09-09 | override `myhome` = "Inicio" | local ✅ · prod ⏳ pendiente |
+| 2026-09-09 | `custommenuitems` = Perfil + Calendario | local ✅ · prod ✅ |
+| 2026-09-09 | override `myhome` = "Inicio" | local ✅ · prod ✅ |
+
+### Verificación del navbar sin navegador
+
+El navbar no se renderiza en la página de login (layout anónimo), así que para comprobarlo
+sin sesión hay que construir la navegación primaria del lado del servidor:
+
+```php
+\core\session\manager::set_user($user);
+$PAGE->set_context(\context_system::instance());
+$PAGE->set_url('/my/');
+$PAGE->set_pagelayout('mydashboard');
+$data = (new \core\navigation\output\primary($PAGE))->export_for_template($PAGE->get_renderer('core'));
+// $data['mobileprimarynav'] = nodos nativos + custom, ya fusionados.
+// Ojo: los nodos custom llegan como stdClass y los nativos como array → castear con (array).
+```
+
+Resultado esperado en prod para un alumno: `Inicio` → `/my/`, `Perfil` →
+`/user/profile.php`, `Calendario` → `/calendar/view.php?view=month`. Un admin ve además
+`Administración del sitio`, insertado entre los nativos y los custom (los custom se añaden
+**después** de los nativos).
+
+### Rollback
+
+`custommenuitems` estaba **vacío** antes del cambio, en ambos entornos:
+
+```bash
+docker compose exec -u www-data php php /var/www/html/admin/cli/cfg.php --name=custommenuitems --set=''
+rm /var/www/moodledata/lang/es_local/moodle.php   # dentro del contenedor php
+docker compose exec -u www-data php php /var/www/html/admin/cli/purge_caches.php
+```
