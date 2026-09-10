@@ -186,7 +186,7 @@ PHP
 |---|---|---|
 | 2026-09-09 | `custommenuitems` = Perfil + Calendario | local ✅ · prod ✅ |
 | 2026-09-09 | override `myhome` = "Inicio" | local ✅ · prod ✅ |
-| 2026-09-10 | `my:manageblocks` Prevent rol 7 + Allow rol 1 (dashboard no editable por no-admin) | local ✅ · prod ⬜ pendiente |
+| 2026-09-10 | `my:manageblocks` Prevent rol 7 + Allow rol 1 (dashboard no editable por no-admin) | local ✅ · prod ✅ |
 
 ### Verificación del navbar sin navegador
 
