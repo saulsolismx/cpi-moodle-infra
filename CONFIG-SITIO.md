@@ -90,12 +90,103 @@ sobre el navy `#002256`, con hover en `$cpi-grey-200`.
 
 ---
 
+## Botón "Personalizar esta página" del dashboard — solo admin/gestores
+
+Objetivo: que **alumnos y profesores NO** puedan personalizar/romper su dashboard (`/my`),
+manteniendo el control para **admin y gestores**. Así todos ven el dashboard uniforme que
+diseñamos.
+
+Esto **no** es `mdl_config` sino un **override de permisos** en `mdl_role_capabilities`
+(también vive en la BD, tampoco viaja con git, hay que aplicarlo en cada entorno).
+
+### Qué controla el botón
+
+La capacidad **`moodle/my:manageblocks`** (contexto SYSTEM). `public/my/index.php:88` la
+fija como capacidad de edición del dashboard; los botones "Personalizar esta página" /
+"Restablecer" y el añadir/mover/borrar bloques del `/my` dependen de ella
+(`blocks/moodleblock.class.php::user_can_edit` / `user_can_addto`).
+
+Por defecto solo la tiene el rol **7 "Usuario autenticado"** en ALLOW (archetype `user`).
+Por eso **todos** los usuarios logueados ven el botón — no viene del rol `student`.
+
+### Por qué Prevent en rol 7 + Allow en rol 1 (y NO en el rol student)
+
+- El rol `student` (5) se asigna a nivel **curso**, que **no** está en la ruta de contexto
+  del dashboard (System→User). Un override en `student` **no llega** al dashboard.
+- Aggregación de `has_capability` (`lib/accesslib.php::has_capability_in_accessdata`):
+  `PROHIBIT` deniega siempre; en otro caso **basta un `ALLOW` en cualquier rol**. Un
+  `PREVENT` **no** anula el `ALLOW` de otro rol.
+- Por tanto: **Prevent** en el rol 7 (quita el botón a todo no-admin) + **Allow** en el rol
+  1 "Gestor" (lo recupera; ALLOW gana). Admin lo conserva por bypass de site admin.
+- ⚠️ **Nunca `Prohibit`** en el rol 7: anularía también a gestores y a admins con rol.
+- Nota: también se lo quita a **profesores** (dependían del rol 7); es el efecto buscado.
+
+### Comandos (usar la API `assign_capability`, no INSERT crudo)
+
+```bash
+docker compose exec -T -u www-data php php /dev/stdin <<'PHP'
+<?php
+define('CLI_SCRIPT', true);
+require('/var/www/html/public/config.php');
+$sys = context_system::instance();
+assign_capability('moodle/my:manageblocks', CAP_PREVENT, 7, $sys->id, true); // Usuario autenticado
+assign_capability('moodle/my:manageblocks', CAP_ALLOW,   1, $sys->id, true); // Gestor
+$sys->mark_dirty();
+purge_all_caches();
+echo "OK\n";
+PHP
+```
+
+### Verificación (sin navegador)
+
+```bash
+docker compose exec -T -u www-data php php /dev/stdin <<'PHP'
+<?php
+define('CLI_SCRIPT', true);
+require('/var/www/html/public/config.php');
+foreach (['admin'=>2, 'alumno.prueba'=>3] as $l=>$uid) {
+  $can = has_capability('moodle/my:manageblocks', context_user::instance($uid), $uid);
+  echo "$l: boton ".($can ? 'SÍ' : 'NO')."\n";
+}
+PHP
+```
+
+Esperado: `admin: boton SÍ` · `alumno.prueba: boton NO`. Visualmente: como admin siguen los
+botones "Dejar de personalizar esta página" / "Restablecer página a por defecto"; entrando
+como el alumno (Perfil → "Entrar como") el dashboard no muestra ningún botón de personalizar
+ni el toggle "Modo de edición".
+
+> Efecto colateral práctico: a un alumno que **ya** personalizó su dashboard le desaparecen
+> los botones y no puede resetearlo él mismo. Para reunificarlo, el admin lo resetea desde
+> la página de dashboard por defecto ("Restablecer Área personal para todos los usuarios").
+
+### Rollback
+
+Estado previo: rol 7 = ALLOW (único), rol 1 sin override.
+
+```bash
+docker compose exec -T -u www-data php php /dev/stdin <<'PHP'
+<?php
+define('CLI_SCRIPT', true);
+require('/var/www/html/public/config.php');
+$sys = context_system::instance();
+assign_capability('moodle/my:manageblocks', CAP_ALLOW, 7, $sys->id, true); // restaura Usuario autenticado
+unassign_capability('moodle/my:manageblocks', 1, $sys->id);                 // quita override del Gestor
+$sys->mark_dirty();
+purge_all_caches();
+echo "rollback OK\n";
+PHP
+```
+
+---
+
 ## Historial
 
 | Fecha | Ajuste | Aplicado en |
 |---|---|---|
 | 2026-09-09 | `custommenuitems` = Perfil + Calendario | local ✅ · prod ✅ |
 | 2026-09-09 | override `myhome` = "Inicio" | local ✅ · prod ✅ |
+| 2026-09-10 | `my:manageblocks` Prevent rol 7 + Allow rol 1 (dashboard no editable por no-admin) | local ✅ · prod ⬜ pendiente |
 
 ### Verificación del navbar sin navegador
 
